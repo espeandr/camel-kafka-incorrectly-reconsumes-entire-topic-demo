@@ -53,12 +53,13 @@ public class BreakOnFirstErrorTest {
 
     @Test
     public void shouldOnlyReconsumeFailedMessageOnError() {
-        List<String> expectedRecords = List.of("1", "2", "3", "4", "5", "6"); // <- Error is thrown on record "5", and should be reconsumed.
+        final List<String> recordsOnKafka = List.of("1", "2", "3", "4", "5", "6"); // <- Error is thrown on record "5", and should be reconsumed.
+        final List<String> expectedConsumedRecords = List.of("1", "2", "3", "4", "5", "5", "6"); // 5 should be consumed twice as error is thrown
 
-        expectedRecords.forEach(recordToProduce -> kafkaInputProducer.sendBody(recordToProduce));
+        recordsOnKafka.forEach(recordToProduce -> kafkaInputProducer.sendBody(recordToProduce));
 
-        await().until(() -> consumedRecords.size() >= expectedRecords.size());
-        assertThat(consumedRecords).isEqualTo(List.of("1", "2", "3", "4", "5", "5", "6"));  // 5 should be consumed twice as error is thrown
+        await().until(() -> consumedRecords.size() >= expectedConsumedRecords.size());
+        assertThat(consumedRecords).isEqualTo(expectedConsumedRecords);
         // Test fails as all records on topic is reconsumed on error.
     }
 
