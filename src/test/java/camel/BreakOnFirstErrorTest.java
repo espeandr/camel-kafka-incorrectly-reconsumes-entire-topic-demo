@@ -5,10 +5,8 @@ import org.apache.camel.Exchange;
 import org.apache.camel.ProducerTemplate;
 import org.apache.camel.builder.AdviceWithRouteBuilder;
 import org.apache.camel.builder.RouteBuilder;
-import org.apache.camel.builder.endpoint.dsl.DirectEndpointBuilderFactory;
 import org.apache.camel.builder.endpoint.dsl.DirectEndpointBuilderFactory.DirectEndpointBuilder;
-import org.apache.camel.builder.endpoint.dsl.KafkaEndpointBuilderFactory;
-import org.apache.camel.component.kafka.consumer.KafkaManualCommit;
+import org.apache.camel.builder.endpoint.dsl.KafkaEndpointBuilderFactory.KafkaEndpointBuilder;
 import org.apache.camel.test.spring.junit5.CamelSpringBootTest;
 import org.apache.camel.test.spring.junit5.UseAdviceWith;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,7 +21,6 @@ import java.util.List;
 
 import static org.apache.camel.builder.endpoint.StaticEndpointBuilders.direct;
 import static org.apache.camel.builder.endpoint.StaticEndpointBuilders.kafka;
-import static org.apache.camel.component.kafka.KafkaConstants.MANUAL_COMMIT;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -34,12 +31,14 @@ import static org.awaitility.Awaitility.await;
 public class BreakOnFirstErrorTest {
 
     private final List<String> consumedRecords = new ArrayList<>();
-    @Autowired
-    protected ProducerTemplate kafkaInputProducer;
+
     @Autowired
     protected CamelContext camelContext;
+
     @Value("${spring.embedded.kafka.brokers}")
     private String brokerAddresses;
+    @Autowired
+    protected ProducerTemplate kafkaProducer;
     private int consumptionCounter = 0;
 
     @BeforeEach
@@ -53,51 +52,41 @@ public class BreakOnFirstErrorTest {
 
     @Test
     public void shouldOnlyReconsumeFailedMessageOnError() {
-        final List<String> recordsOnKafka = List.of("1", "2", "3", "4", "5", "6"); // <- Error is thrown on record "5", and should be reconsumed.
+        final List<String> producedRecords = List.of("1", "2", "3", "4", "5", "6"); // <- Error is thrown once on record "5"
         final List<String> expectedConsumedRecords = List.of("1", "2", "3", "4", "5", "5", "6"); // 5 should be consumed twice as error is thrown
 
-        recordsOnKafka.forEach(recordToProduce -> kafkaInputProducer.sendBody(recordToProduce));
+        producedRecords.forEach(kafkaProducer::sendBody);
 
-        await().until(() -> consumedRecords.size() >= expectedConsumedRecords.size());
-        assertThat(consumedRecords).isEqualTo(expectedConsumedRecords);
-        // Test fails as all records on topic is reconsumed on error.
+        await().untilAsserted(() ->
+                                  // Assertion fails as all records on topic are reconsumed on error.
+                                  assertThat(consumedRecords).isEqualTo(expectedConsumedRecords));
     }
 
     private void createConsumerRoute(RouteBuilder builder) {
-        final DirectEndpointBuilderFactory.DirectEndpointBuilder commitOffsetRoute = direct("commit-offset-route");
         builder.from(kafkaTestTopic()
                          .autoOffsetReset("earliest")
-                         .allowManualCommit(true)
-                         .autoCommitEnable(false)
                          .breakOnFirstError(true)
-                         .maxPollRecords(1) // <- Setting this to 1 causes camel to incorrectly reconsume all messages on error
+                         .maxPollRecords(4) // 1, 2, 4 causes the test to fail.
             )
             .process().body(String.class, body -> consumedRecords.add(body))
-            .process(this::ifIsFifthRecordThrowException)
-            .process(this::commitOffsetManually);
-
-    }
-
-    private void commitOffsetManually(final Exchange e) {
-        e.getIn().getHeader(MANUAL_COMMIT, KafkaManualCommit.class).commit();
+            .process(this::ifIsFifthRecordThrowException);
     }
 
     private void ifIsFifthRecordThrowException(Exchange e) {
-        consumptionCounter++;
-        if (consumptionCounter == 5) {
-            throw new RuntimeException("ERROR_TRIGGER_BY_TEST");
+        if (++consumptionCounter == 5) {
+            throw new RuntimeException("ERROR_TRIGGERED_BY_TEST");
         }
     }
 
     private void createProducerRoute(RouteBuilder builder) {
-        DirectEndpointBuilder mockKafkaProducer = direct("mockKafkaProducer");
-        kafkaInputProducer.setDefaultEndpoint(mockKafkaProducer.resolve(camelContext));
+        final DirectEndpointBuilder mockKafkaProducer = direct("mockKafkaProducer");
+        kafkaProducer.setDefaultEndpoint(mockKafkaProducer.resolve(camelContext));
 
         builder.from(mockKafkaProducer)
             .to(kafkaTestTopic());
     }
 
-    private KafkaEndpointBuilderFactory.KafkaEndpointBuilder kafkaTestTopic() {
+    private KafkaEndpointBuilder kafkaTestTopic() {
         return kafka("test_topic")
             .brokers(brokerAddresses);
     }
