@@ -4,5 +4,5 @@ Project with test demonstrating issue in [(CAMEL-18350) camel-kafka: combination
 
 ## Versions
 * java 17
-* Spring boot 2.7.2
-* Camel 3.18.0
+* Spring boot 2.7.3
+* Camel 3.18.2
